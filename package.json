@@ -1,0 +1,14 @@
+{
+  "name": "pingdou",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "本机托管的单人及多人实时拼豆板",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node src/cli.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/server.mjs && node --check public/app.mjs && node --check public/boot.js"
+  },
+  "dependencies": { "ws": "^8.18.3" }
+}

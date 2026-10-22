@@ -1,0 +1,6 @@
+node_modules/
+data/
+tools/*.exe
+*.log
+test-output/
+

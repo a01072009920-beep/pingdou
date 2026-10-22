@@ -1,0 +1,204 @@
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { timingSafeEqual } from 'node:crypto';
+import { WebSocketServer, WebSocket } from 'ws';
+import { applyOperation } from './board.mjs';
+import { loadRoom, saveRoom } from './store.mjs';
+import { ExportManager } from './export.mjs';
+import { catalog, changeCanvas, withBoard } from './canvases.mjs';
+
+const publicDir = new URL('../public/', import.meta.url);
+const assets = new Map([
+  ['/', ['index.html', 'text/html; charset=utf-8']],
+  ['/index.html', ['index.html', 'text/html; charset=utf-8']],
+  ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+  ['/app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
+  ['/boot.js', ['boot.js', 'text/javascript; charset=utf-8']],
+  ['/interaction.mjs', ['interaction.mjs', 'text/javascript; charset=utf-8']],
+  ['/sync-state.mjs', ['sync-state.mjs', 'text/javascript; charset=utf-8']],
+  ['/palette.mjs', ['palette.mjs', 'text/javascript; charset=utf-8']],
+]);
+const securityHeaders = {
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Cache-Control': 'no-store',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' ws: wss:; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+};
+
+export async function createApp({ dataDir = fileURLToPath(new URL('../data/', import.meta.url)), port = 3210,
+  host = '127.0.0.1', save = saveRoom, onError = () => {} } = {}) {
+  const room = await loadRoom(dataDir);
+  const exporter = new ExportManager();
+  let queue = Promise.resolve(), queued = 0, closing = false, closedPromise;
+  const validKey = key => typeof key === 'string' && /^[a-f0-9]{48}$/.test(key)
+    && timingSafeEqual(Buffer.from(key), Buffer.from(room.key));
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 4096, perMessageDeflate: false });
+  const online = () => [...wss.clients].filter(ws => ws.authorized && ws.readyState === WebSocket.OPEN).length;
+  const send = (ws, message) => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (ws.bufferedAmount > 2 * 1024 * 1024) { ws.terminate(); return; }
+    ws.send(JSON.stringify(message));
+  };
+  const broadcast = message => { for (const ws of wss.clients) if (ws.authorized) send(ws, message); };
+  const presence = () => broadcast({ type: 'presence', online: online() });
+  const snapshotData = () => ({ type: 'snapshot', board: room.board, online: online(),
+    canvasId: room.activeId, epoch: room.canvasEpoch, canvases: catalog(room) });
+  const snapshot = ws => send(ws, snapshotData());
+
+  const server = createServer(async (req, res) => {
+    for (const [name, value] of Object.entries(securityHeaders)) res.setHeader(name, value);
+    try {
+      const path = new URL(req.url, 'http://localhost').pathname;
+      if (path === '/api/export' && req.method === 'POST') {
+        const key = req.headers.authorization?.replace(/^Bearer /, '');
+        if (!validKey(key)) { res.writeHead(401); res.end('需要有效邀请链接'); return; }
+        const board = room.board;
+        try {
+          const png = await exporter.render(board);
+          if (res.destroyed) return;
+          res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length,
+            'Content-Disposition': `attachment; filename="bead-room-v${board.revision}-4096x4096.png"` });
+          res.end(png);
+        } catch (error) {
+          if (!res.destroyed) { res.writeHead(error.code === 'export_busy' ? 429 : 500, {'Content-Type':'text/plain; charset=utf-8'}); res.end(error.message); }
+        }
+        return;
+      }
+      if (path === '/api/health' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, service: 'bead-room' }));
+        return;
+      }
+      if (!['GET', 'HEAD'].includes(req.method) || !assets.has(path)) {
+        res.writeHead(404); res.end('Not found'); return;
+      }
+      const [file, contentType] = assets.get(path);
+      const content = await readFile(new URL(file, publicDir));
+      res.writeHead(200, { 'Content-Type': contentType });
+      res.end(req.method === 'HEAD' ? undefined : content);
+    } catch (error) {
+      if (!res.headersSent) res.writeHead(error.code === 'ENOENT' ? 404 : 500);
+      res.end('Unable to serve request');
+      onError(error);
+    }
+  });
+
+  server.on('upgrade', (req, socket, head) => {
+    socket.on('error', () => {});
+    let originMatches = true;
+    if (req.headers.origin) {
+      try { originMatches = new URL(req.headers.origin).host === req.headers.host; }
+      catch { originMatches = false; }
+    }
+    if (closing || req.url !== '/ws' || !originMatches || wss.clients.size >= 64) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
+    }
+    wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
+  });
+
+  wss.on('connection', ws => {
+    ws.authorized = false;
+    ws.alive = true;
+    ws.pending = 0;
+    ws.rate = { since: Date.now(), count: 0 };
+    const authTimer = setTimeout(() => ws.close(1008, 'Authentication required'), 5000);
+    authTimer.unref();
+    ws.on('error', () => {});
+    ws.on('pong', () => { ws.alive = true; });
+    ws.on('close', () => { clearTimeout(authTimer); if (ws.authorized && !closing) presence(); });
+    ws.on('message', (raw, isBinary) => {
+      if (closing) return;
+      if (Date.now() - ws.rate.since > 1000) ws.rate = { since: Date.now(), count: 0 };
+      if (++ws.rate.count > 60) { ws.close(1008, 'Too many messages'); return; }
+      if (isBinary) { ws.close(1003, 'Text messages only'); return; }
+      let message;
+      try { message = JSON.parse(raw.toString()); }
+      catch { send(ws, { type: 'error', code: 'invalid', message: '消息格式无效' }); return; }
+      if (!message || typeof message !== 'object' || Array.isArray(message)) {
+        send(ws, { type: 'error', code: 'invalid', message: '消息格式无效' }); return;
+      }
+      if (!ws.authorized) {
+        if (message.type !== 'auth' || !validKey(message.key)) {
+          send(ws, { type: 'error', code: 'unauthorized', message: '邀请密钥不正确，请重新打开完整邀请链接' });
+          ws.close(1008, 'Unauthorized'); return;
+        }
+        ws.authorized = true;
+        clearTimeout(authTimer);
+        snapshot(ws); presence(); return;
+      }
+      if (message.type === 'sync') { snapshot(ws); return; }
+      if (!['op', 'canvas'].includes(message.type)) { send(ws, { type: 'error', code: 'invalid', message: '不支持的操作' }); return; }
+      if (ws.pending >= 32 || queued >= 256) {
+        send(ws, { type: 'rejected', requestId: message.requestId, code: 'busy' }); return;
+      }
+      ws.pending++; queued++;
+      queue = queue.then(async () => {
+        if (closing || ws.readyState !== WebSocket.OPEN) return;
+        if (message.type === 'canvas') {
+          if (typeof message.requestId !== 'string' || message.requestId.length > 80) {
+            send(ws, { type: 'rejected', requestId: message.requestId, code: 'invalid' }); return;
+          }
+          const changed = changeCanvas(room, message);
+          if (!changed.ok) { send(ws, { type: 'rejected', requestId: message.requestId, code: changed.code }); return; }
+          try { await save(dataDir, changed.room); }
+          catch (error) { onError(error); send(ws, { type: 'rejected', requestId: message.requestId, code: 'save_failed' }); return; }
+          Object.assign(room, changed.room);
+          broadcast({ ...snapshotData(), requestId: message.requestId }); return;
+        }
+        if ((message.canvasId !== undefined || room.canvasEpoch !== 0)
+          && (message.canvasId !== room.activeId || message.epoch !== room.canvasEpoch)) {
+          send(ws, { type: 'rejected', requestId: message.requestId, code: 'stale_canvas' }); return;
+        }
+        const result = applyOperation(room.board, message);
+        const cell = Number.isInteger(message.index) ? room.board.cells[message.index] : undefined;
+        if (!result.ok) {
+          send(ws, { type: 'rejected', requestId: message.requestId, code: result.code,
+            index: cell ? message.index : undefined, cell, revision: room.board.revision }); return;
+        }
+        if (!result.changed) {
+          send(ws, { type: 'unchanged', requestId: message.requestId, index: message.index, cell,
+            revision: room.board.revision }); return;
+        }
+        const updated = withBoard(room, result.board);
+        try { await save(dataDir, updated); }
+        catch (error) {
+          onError(error);
+          send(ws, { type: 'rejected', requestId: message.requestId, code: 'save_failed' }); return;
+        }
+        Object.assign(room, updated);
+        broadcast({ type: 'patch', ...result.patch, canvasId: room.activeId, epoch: room.canvasEpoch });
+      }).catch(error => { onError(error); send(ws, { type: 'error', code: 'internal', message: '操作失败，请重新连接' }); })
+        .finally(() => { ws.pending--; queued--; });
+    });
+  });
+
+  const heartbeat = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (!ws.alive) { ws.terminate(); continue; }
+      ws.alive = false;
+      if (ws.readyState === WebSocket.OPEN) ws.ping();
+    }
+  }, 25000);
+  heartbeat.unref();
+
+  return { server, room,
+    address: () => server.address(),
+    start: () => new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, host, () => { server.off('error', reject); resolve(); });
+    }),
+    close: () => {
+      if (closedPromise) return closedPromise;
+      closing = true; clearInterval(heartbeat);
+      for (const ws of wss.clients) ws.terminate();
+      closedPromise = (async () => {
+        await queue;
+        await exporter.close();
+        await new Promise(resolve => wss.close(resolve));
+        if (server.listening) await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
+      })();
+      return closedPromise;
+    },
+  };
+}
