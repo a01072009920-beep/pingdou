@@ -1,10 +1,11 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { applyOperation } from './board.mjs';
-import { loadRoom, saveRoom } from './store.mjs';
+import { saveRoom } from './store.mjs';
+import { openRooms, roomInfo } from './rooms.mjs';
+import { createRoomAPI, sameOrigin } from './room-api.mjs';
 import { ExportManager } from './export.mjs';
 import { catalog, changeCanvas, withBoard } from './canvases.mjs';
 
@@ -18,6 +19,8 @@ const assets = new Map([
   ['/interaction.mjs', ['interaction.mjs', 'text/javascript; charset=utf-8']],
   ['/sync-state.mjs', ['sync-state.mjs', 'text/javascript; charset=utf-8']],
   ['/palette.mjs', ['palette.mjs', 'text/javascript; charset=utf-8']],
+  ['/rooms.mjs', ['rooms.mjs', 'text/javascript; charset=utf-8']],
+  ['/workspace.mjs', ['workspace.mjs', 'text/javascript; charset=utf-8']],
 ]);
 const securityHeaders = {
   'X-Content-Type-Options': 'nosniff',
@@ -28,32 +31,35 @@ const securityHeaders = {
 
 export async function createApp({ dataDir = fileURLToPath(new URL('../data/', import.meta.url)), port = 3210,
   host = '127.0.0.1', save = saveRoom, onError = () => {} } = {}) {
-  const room = await loadRoom(dataDir);
+  const rooms = await openRooms(dataDir, {save});
+  const room = rooms.legacy.room;
   const exporter = new ExportManager();
-  let queue = Promise.resolve(), queued = 0, closing = false, closedPromise;
-  const validKey = key => typeof key === 'string' && /^[a-f0-9]{48}$/.test(key)
-    && timingSafeEqual(Buffer.from(key), Buffer.from(room.key));
+  const roomAPI = createRoomAPI(rooms, onError);
+  let closing = false, closedPromise;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096, perMessageDeflate: false });
-  const online = () => [...wss.clients].filter(ws => ws.authorized && ws.readyState === WebSocket.OPEN).length;
+  const online = entry => [...wss.clients].filter(ws => ws.authorized && ws.entry === entry && ws.readyState === WebSocket.OPEN).length;
   const send = (ws, message) => {
     if (ws.readyState !== WebSocket.OPEN) return;
     if (ws.bufferedAmount > 2 * 1024 * 1024) { ws.terminate(); return; }
     ws.send(JSON.stringify(message));
   };
-  const broadcast = message => { for (const ws of wss.clients) if (ws.authorized) send(ws, message); };
-  const presence = () => broadcast({ type: 'presence', online: online() });
-  const snapshotData = () => ({ type: 'snapshot', board: room.board, online: online(),
-    canvasId: room.activeId, epoch: room.canvasEpoch, canvases: catalog(room) });
-  const snapshot = ws => send(ws, snapshotData());
+  const broadcast = (entry, message) => { for (const ws of wss.clients) if (ws.authorized && ws.entry === entry) send(ws, message); };
+  const presence = entry => broadcast(entry, { type: 'presence', online: online(entry) });
+  const snapshotData = entry => ({ type: 'snapshot', board: entry.room.board, online: online(entry), room:roomInfo(entry),
+    canvasId: entry.room.activeId, epoch: entry.room.canvasEpoch, canvases: catalog(entry.room) });
+  const snapshot = ws => send(ws, snapshotData(ws.entry));
 
   const server = createServer(async (req, res) => {
     for (const [name, value] of Object.entries(securityHeaders)) res.setHeader(name, value);
     try {
       const path = new URL(req.url, 'http://localhost').pathname;
+      if (closing) { res.writeHead(503); res.end('服务正在关闭'); return; }
+      if (await roomAPI(req, res, path)) return;
       if (path === '/api/export' && req.method === 'POST') {
         const key = req.headers.authorization?.replace(/^Bearer /, '');
-        if (!validKey(key)) { res.writeHead(401); res.end('需要有效邀请链接'); return; }
-        const board = room.board;
+        const entry = rooms.byKey(key);
+        if (!entry) { res.writeHead(401); res.end('需要有效房间凭据'); return; }
+        const board = entry.room.board;
         try {
           const png = await exporter.render(board);
           if (res.destroyed) return;
@@ -86,11 +92,7 @@ export async function createApp({ dataDir = fileURLToPath(new URL('../data/', im
 
   server.on('upgrade', (req, socket, head) => {
     socket.on('error', () => {});
-    let originMatches = true;
-    if (req.headers.origin) {
-      try { originMatches = new URL(req.headers.origin).host === req.headers.host; }
-      catch { originMatches = false; }
-    }
+    const originMatches = sameOrigin(req);
     if (closing || req.url !== '/ws' || !originMatches || wss.clients.size >= 64) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
     }
@@ -106,7 +108,7 @@ export async function createApp({ dataDir = fileURLToPath(new URL('../data/', im
     authTimer.unref();
     ws.on('error', () => {});
     ws.on('pong', () => { ws.alive = true; });
-    ws.on('close', () => { clearTimeout(authTimer); if (ws.authorized && !closing) presence(); });
+    ws.on('close', () => { clearTimeout(authTimer); if (ws.authorized && !closing) presence(ws.entry); });
     ws.on('message', (raw, isBinary) => {
       if (closing) return;
       if (Date.now() - ws.rate.since > 1000) ws.rate = { since: Date.now(), count: 0 };
@@ -119,21 +121,24 @@ export async function createApp({ dataDir = fileURLToPath(new URL('../data/', im
         send(ws, { type: 'error', code: 'invalid', message: '消息格式无效' }); return;
       }
       if (!ws.authorized) {
-        if (message.type !== 'auth' || !validKey(message.key)) {
+        const entry = message.type === 'auth' ? rooms.byKey(message.key) : null;
+        if (!entry) {
           send(ws, { type: 'error', code: 'unauthorized', message: '邀请密钥不正确，请重新打开完整邀请链接' });
           ws.close(1008, 'Unauthorized'); return;
         }
         ws.authorized = true;
+        ws.entry = entry;
         clearTimeout(authTimer);
-        snapshot(ws); presence(); return;
+        snapshot(ws); presence(entry); return;
       }
       if (message.type === 'sync') { snapshot(ws); return; }
       if (!['op', 'canvas'].includes(message.type)) { send(ws, { type: 'error', code: 'invalid', message: '不支持的操作' }); return; }
-      if (ws.pending >= 32 || queued >= 256) {
+      const entry = ws.entry, room = entry.room;
+      if (ws.pending >= 32 || entry.queued >= 256) {
         send(ws, { type: 'rejected', requestId: message.requestId, code: 'busy' }); return;
       }
-      ws.pending++; queued++;
-      queue = queue.then(async () => {
+      ws.pending++; entry.queued++;
+      entry.queue = entry.queue.then(async () => {
         if (closing || ws.readyState !== WebSocket.OPEN) return;
         if (message.type === 'canvas') {
           if (typeof message.requestId !== 'string' || message.requestId.length > 80) {
@@ -141,10 +146,10 @@ export async function createApp({ dataDir = fileURLToPath(new URL('../data/', im
           }
           const changed = changeCanvas(room, message);
           if (!changed.ok) { send(ws, { type: 'rejected', requestId: message.requestId, code: changed.code }); return; }
-          try { await save(dataDir, changed.room); }
+          try { await save(entry.dataDir, changed.room); }
           catch (error) { onError(error); send(ws, { type: 'rejected', requestId: message.requestId, code: 'save_failed' }); return; }
           Object.assign(room, changed.room);
-          broadcast({ ...snapshotData(), requestId: message.requestId }); return;
+          broadcast(entry, { ...snapshotData(entry), requestId: message.requestId }); return;
         }
         if ((message.canvasId !== undefined || room.canvasEpoch !== 0)
           && (message.canvasId !== room.activeId || message.epoch !== room.canvasEpoch)) {
@@ -161,15 +166,15 @@ export async function createApp({ dataDir = fileURLToPath(new URL('../data/', im
             revision: room.board.revision }); return;
         }
         const updated = withBoard(room, result.board);
-        try { await save(dataDir, updated); }
+        try { await save(entry.dataDir, updated); }
         catch (error) {
           onError(error);
           send(ws, { type: 'rejected', requestId: message.requestId, code: 'save_failed' }); return;
         }
         Object.assign(room, updated);
-        broadcast({ type: 'patch', ...result.patch, canvasId: room.activeId, epoch: room.canvasEpoch });
+        broadcast(entry, { type: 'patch', ...result.patch, canvasId: room.activeId, epoch: room.canvasEpoch });
       }).catch(error => { onError(error); send(ws, { type: 'error', code: 'internal', message: '操作失败，请重新连接' }); })
-        .finally(() => { ws.pending--; queued--; });
+        .finally(() => { ws.pending--; entry.queued--; });
     });
   });
 
@@ -182,7 +187,7 @@ export async function createApp({ dataDir = fileURLToPath(new URL('../data/', im
   }, 25000);
   heartbeat.unref();
 
-  return { server, room,
+  return { server, room, rooms,
     address: () => server.address(),
     start: () => new Promise((resolve, reject) => {
       server.once('error', reject);
@@ -193,7 +198,8 @@ export async function createApp({ dataDir = fileURLToPath(new URL('../data/', im
       closing = true; clearInterval(heartbeat);
       for (const ws of wss.clients) ws.terminate();
       closedPromise = (async () => {
-        await queue;
+        await rooms.idle();
+        await Promise.all([...rooms.entries.values()].map(entry => entry.queue));
         await exporter.close();
         await new Promise(resolve => wss.close(resolve));
         if (server.listening) await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });

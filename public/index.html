@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#e9eff5">
-  <meta name="description" content="一格一豆，和朋友在同一张板上慢慢拼。支持手机、电脑与4K作品导出。">
+  <meta name="description" content="创建自己的拼豆房间，用邀请码和朋友一起拼。支持手机、平板、电脑与4K导出。">
   <title>豆在一起 · 共享拼豆小屋</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="./styles.css">
@@ -12,86 +12,80 @@
 </head>
 <body>
   <section id="startup-notice" class="startup-notice" aria-labelledby="startup-title" hidden>
-    <span class="startup-tag">豆在一起 · 启动指引</span>
-    <h1 id="startup-title">先启动拼豆小屋，再开始拼豆</h1>
-    <p>你正在直接打开网页文件。拼豆板需要电脑上的服务来加载色盘、同步和保存作品。</p>
-    <ol>
-      <li>返回 <strong>pingdou</strong> 文件夹，双击 <strong>启动拼豆.cmd</strong>。</li>
-      <li>保持启动窗口打开，浏览器会自动打开带房间密钥的完整链接。</li>
-      <li>如果浏览器没有自动打开，请复制启动窗口中的完整链接。</li>
-    </ol>
+    <span class="startup-tag">豆在一起 · 启动指引</span><h1 id="startup-title">先启动拼豆小屋，再开始拼豆</h1>
+    <p>拼豆板需要电脑上的服务来加载色盘、同步和保存作品。</p>
+    <ol><li>返回项目文件夹，双击 <strong>启动拼豆.cmd</strong>。</li><li>保持启动窗口打开，浏览器会自动打开拼豆页面。</li><li>手机和朋友使用穿透提供的网站地址，再输入房间邀请码。</li></ol>
     <a class="button button-primary" href="http://127.0.0.1:3210/">打开本机拼豆页面</a>
-    <p class="startup-footnote">上面的按钮适用于默认端口；仍需先启动服务。页面要求邀请链接时，使用启动窗口中的完整链接。不要直接双击 public/index.html。</p>
+    <p class="startup-footnote">默认端口为 3210；仍需先启动服务。不要直接双击 public/index.html。</p>
   </section>
   <div id="app-root">
-  <header class="topbar">
-    <a class="brand" href="#" aria-label="豆在一起，拼豆小屋">
-      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-      <span><strong>豆在一起<span class="brand-period">.</span></strong><small>把小小的颜色，拼成喜欢的样子</small></span>
-    </a>
-    <div class="header-actions">
-      <div class="connection"><span id="connection-dot" class="status-dot"></span><span id="connection-text">连接中</span></div>
-      <button id="export-button" class="button button-quiet" disabled>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4"/></svg><span>导出 4K</span>
-      </button>
-      <button id="invite-button" class="button button-primary" disabled>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 20v-2a5 5 0 0 0-10 0v2m15-11v6m-3-3h6"/><circle cx="10" cy="7" r="4"/></svg><span>邀请一起拼</span>
-      </button>
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="豆在一起，适应画板"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><strong>豆在一起<span class="brand-period">.</span></strong></a>
+      <span id="room-name" class="room-name">选择房间</span>
+      <div class="header-actions">
+        <div class="connection"><span id="connection-dot" class="status-dot"></span><span id="connection-text">请选择房间</span></div>
+        <button id="room-button" class="button button-quiet">房间</button>
+        <button id="invite-button" class="button button-primary" disabled>邀请</button>
+        <button id="more-button" class="button button-quiet" aria-label="画布与更多操作">更多</button>
+      </div>
+    </header>
+    <div class="workbench">
+      <aside id="palette-panel" class="toolbox" aria-label="调色盘">
+        <div class="toolbox-top"><div><h1>你的调色盘</h1><span>MARD · 291 色</span></div><button id="palette-close" class="plain-button" aria-label="收起调色盘">收起</button></div>
+        <div class="palette-controls"><div class="palette-filters"><select id="palette-group" aria-label="筛选色系"><option value="">全部色系</option></select><input id="palette-search" type="search" aria-label="搜索色号或 HEX" placeholder="色号 / HEX" autocomplete="off" spellcheck="false"></div><p id="palette-count" role="status" aria-live="polite">291 色 · 按色号排列</p></div>
+        <div class="palette-scroll"><div id="palette" class="palette" role="group" aria-label="选择豆的颜色"></div><p id="palette-empty" hidden>没有匹配的颜色，请更换色系或搜索词。</p></div>
+      </aside>
+      <main class="workspace">
+        <div class="board-heading"><div class="board-title"><span aria-hidden="true" class="board-title-icon">▦</span><select id="canvas-select" aria-label="我的画布" disabled><option>我的画布</option></select><span class="size-label">64 × 64</span></div><span class="saved-status" id="save-status" role="status">等待连接</span></div>
+        <section class="board-shell" aria-label="共享拼豆板工作区">
+          <div class="board-topline"><span id="coordinate-label">请选择格子</span><span class="board-version" id="board-version">作品 0000</span></div>
+          <div id="canvas-container" class="canvas-container">
+            <canvas id="board" tabindex="0" role="grid" aria-rowcount="64" aria-colcount="64" aria-label="拼豆板。方向键选择格子，回车放豆或擦除，P切换放豆，E切换橡皮。">请使用支持 Canvas 的浏览器打开拼豆板。</canvas>
+            <div id="offline-veil" class="offline-veil"><span id="offline-label">创建房间，或输入邀请码加入</span></div>
+          </div>
+          <div class="board-bottomline"><span><strong id="bead-count">0</strong> / <span id="cell-capacity">4,096</span> 颗豆</span><div id="empty-hint" class="empty-hint" hidden>从第一颗豆开始</div><span class="board-instruction">按住左键 + WASD 连放 · 触屏单指绘制</span></div>
+        </section>
+        <footer class="workspace-footer">
+          <div class="drawing-toolbar">
+            <div class="tool-switch" role="group" aria-label="选择工具">
+              <button id="place-tool" class="tool-button selected" aria-pressed="true"><span class="mini-bead" aria-hidden="true"></span>放豆</button>
+              <button id="erase-tool" class="tool-button" aria-pressed="false">橡皮</button>
+              <button id="move-tool" class="tool-button" aria-pressed="false">移动</button>
+            </div>
+            <button id="palette-toggle" class="selected-color" aria-controls="palette-panel" aria-expanded="true" aria-label="收起色盘"><span id="current-bead" class="current-bead" aria-hidden="true"></span><span><strong id="color-name">F4</strong><span class="color-caption">色盘</span><span id="color-hex">#FC283C</span></span></button>
+            <button id="focus-toggle" class="button button-quiet" aria-pressed="false">专注</button>
+          </div>
+          <div class="zoom-control" role="group" aria-label="画板缩放"><button id="zoom-out" aria-label="缩小画板">−</button><output id="zoom-value">100%</output><button id="zoom-in" aria-label="放大画板">+</button><span class="zoom-divider"></span><button id="zoom-fit" class="fit-button">适应画板</button></div>
+        </footer>
+      </main>
     </div>
-  </header>
-
-  <div class="workbench">
-    <aside class="toolbox" aria-label="拼豆工具">
-      <div class="toolbox-top"><h1>你的调色盘</h1><span>MARD · 291 色</span></div>
-      <div class="tool-switch" role="group" aria-label="选择工具">
-        <button id="place-tool" class="tool-button selected" aria-pressed="true"><span class="mini-bead" aria-hidden="true"></span>放豆 <kbd>P</kbd></button>
-        <button id="erase-tool" class="tool-button" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 13 9-9a2 2 0 0 1 3 0l4 4a2 2 0 0 1 0 3l-9 9H7l-3-3a3 3 0 0 1 0-4Zm4-4 9 8M11 20h10"/></svg>橡皮 <kbd>E</kbd></button>
-        <button id="move-tool" class="tool-button" aria-pressed="false">移动</button>
-      </div>
-      <div class="palette-controls">
-        <div class="palette-filters"><select id="palette-group" aria-label="筛选色系"><option value="">全部色系</option></select><input id="palette-search" type="search" aria-label="搜索色号或 HEX" placeholder="色号 / HEX" autocomplete="off" spellcheck="false"></div>
-        <p id="palette-count" role="status" aria-live="polite">291 色 · 按色号排列</p>
-      </div>
-      <div class="palette-scroll"><div id="palette" class="palette" role="group" aria-label="选择豆的颜色"></div><p id="palette-empty" hidden>没有匹配的颜色，请更换色系或搜索词。</p></div>
-      <div class="selected-color"><span id="current-bead" class="current-bead"></span><div><strong id="color-name">F4</strong><span id="color-hex">#FC283C</span></div><span class="color-caption">当前颜色</span></div>
-      <div class="tool-note"><span class="note-symbol" aria-hidden="true">↳</span><p>想换个颜色？<br><strong>先擦空，再放豆。</strong></p></div>
-      <div class="sidebar-bottom"><span class="tiny-dots" aria-hidden="true"><i></i><i></i><i></i></span><p>一个人享受专注<br>两个人分享灵感</p></div>
-    </aside>
-
-    <main class="workspace">
-      <div class="board-heading"><div class="board-title"><span class="board-title-icon" aria-hidden="true">▦</span><h2>我们的拼豆板</h2><span class="size-label">64 × 64</span></div><div class="saved-status" id="save-status" role="status">等待连接</div></div>
-      <div class="canvas-actions"><select id="canvas-select" aria-label="我的画布" disabled></select><button id="canvas-new" class="button button-quiet" disabled>新建</button><button id="canvas-expand" class="button button-quiet" disabled>扩展</button><button id="canvas-clear" class="button button-quiet" disabled>清盘</button></div>
-      <section class="board-shell" aria-label="共享拼豆板工作区">
-        <div class="board-topline"><span id="coordinate-label">每一个小格，都有可能</span><span class="board-version" id="board-version">作品 0000</span></div>
-        <div id="canvas-container" class="canvas-container">
-          <canvas id="board" tabindex="0" role="grid" aria-rowcount="64" aria-colcount="64" aria-label="64乘64拼豆板。方向键选择格子，回车放豆或擦除，P切换放豆，E切换橡皮。">请使用支持 Canvas 的浏览器打开拼豆板。</canvas>
-          <div id="offline-veil" class="offline-veil" hidden><span id="offline-label">正在连接拼豆小屋…</span></div>
-        </div>
-        <div class="board-bottomline"><span><strong id="bead-count">0</strong> / <span id="cell-capacity">4,096</span> 颗豆</span><div id="empty-hint" class="empty-hint"><span class="hint-beads" aria-hidden="true"><i></i><i></i><i></i></span><strong>从第一颗豆开始</strong></div><span class="board-instruction">电脑：按住左键 + WASD 连放 · 触屏：单指绘制，双指移动缩放</span><button id="grid-toggle" class="plain-button" aria-pressed="true">网格 开</button></div>
-      </section>
-      <footer class="workspace-footer"><div class="room-presence"><span class="avatar">我</span><span id="presence-text">一个人，也可以开始</span></div><div class="zoom-control" role="group" aria-label="画板缩放"><button id="zoom-out" aria-label="缩小画板">−</button><output id="zoom-value">100%</output><button id="zoom-in" aria-label="放大画板">+</button><span class="zoom-divider"></span><button id="zoom-fit" class="fit-button">适应画板</button></div></footer>
-    </main>
-  </div>
-
-  <dialog id="canvas-dialog" class="dialog">
-    <form id="canvas-form"><h2 id="canvas-dialog-title">新建画布</h2><p id="canvas-dialog-note"></p>
-    <div id="canvas-fields"><label for="canvas-name">画布名称</label><input id="canvas-name" maxlength="60" value="新的作品" required>
-    <div class="dimension-fields"><label>列数<input id="canvas-width" type="number" min="8" max="256" value="64" required></label><label>行数<input id="canvas-height" type="number" min="8" max="256" value="64" required></label></div></div>
-    <div class="dialog-actions"><button id="canvas-cancel" type="button" class="button button-quiet">取消</button><button type="submit" class="button button-primary">确认</button></div></form>
-  </dialog>
-  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <dialog id="join-dialog" class="dialog join-dialog">
-    <div class="dialog-beads" aria-hidden="true"><i></i><i></i><i></i></div><h2>来拼一会儿豆吧</h2>
-    <p>粘贴完整邀请链接或房间密钥，继续同一张作品。一个人也可以直接开始。</p>
-    <form id="join-form"><label for="room-input">邀请链接或密钥</label><input id="room-input" autocomplete="off" spellcheck="false" placeholder="粘贴邀请链接或 48 位密钥" required><p id="join-error" class="form-error" role="alert"></p><button class="button button-primary" type="submit">进入拼豆小屋</button></form>
-    <p class="dialog-footnote">电脑主人可在启动服务的窗口中找到本机完整链接。</p>
-  </dialog>
-  <dialog id="invite-dialog" class="dialog">
-    <h2>一起，把颜色拼起来</h2><p>把完整链接发给朋友，对方用手机或电脑浏览器打开，就能一起拼豆。</p>
-    <label for="invite-url">房间邀请链接</label><textarea id="invite-url" rows="3" readonly></textarea><p id="invite-note" class="invite-note"></p>
-    <div class="dialog-actions"><button id="invite-close" class="button button-quiet">返回画板</button><button id="copy-link" class="button button-primary">复制完整链接</button></div>
-  </dialog>
-  <dialog id="download-dialog" class="dialog"><h2>4K 作品已准备好</h2><p>4096 × 4096 PNG，已经开始下载。手机用户可以在浏览器下载列表或“文件”中找到图片，再保存到相册。</p><a id="download-again" class="button button-primary" download>再次下载图片</a><button id="download-close" class="button button-quiet">返回画板</button></dialog>
+    <dialog id="more-dialog" class="dialog" aria-labelledby="more-title">
+      <h2 id="more-title">画布与更多</h2><p id="presence-text">一个人，也可以开始</p>
+      <div class="canvas-actions"><button id="canvas-new" class="button button-quiet" disabled>新建画布</button><button id="canvas-expand" class="button button-quiet" disabled>扩展画布</button><button id="canvas-clear" class="button button-quiet" disabled>清盘</button></div>
+      <div class="canvas-actions"><button id="export-button" class="button button-primary" disabled><span>导出 4K</span></button><button id="grid-toggle" class="button button-quiet" aria-pressed="true">网格 开</button></div>
+      <details class="help"><summary>操作帮助</summary><p>每格一颗豆，换色前先擦除。电脑轻点放豆，普通拖动移动板面；按住左键配合 W / A / S / D 连续放豆。</p><p>手机和平板单指沿轨迹放豆，双指移动缩放；选“移动”后可单指平移。放大后更容易精确操作。</p><p>新建会保留旧画布；清盘会保存可重新打开的备份。同一房间的画布变化会同步给所有参与者。</p></details>
+      <div class="dialog-actions"><button id="more-close" class="button button-quiet">返回画板</button></div>
+    </dialog>
+    <dialog id="canvas-dialog" class="dialog" aria-labelledby="canvas-dialog-title">
+      <form id="canvas-form"><h2 id="canvas-dialog-title">新建画布</h2><p id="canvas-dialog-note"></p><div id="canvas-fields"><label for="canvas-name">画布名称</label><input id="canvas-name" maxlength="60" value="新的作品" required><div class="dimension-fields"><label>列数<input id="canvas-width" type="number" min="8" max="256" value="64" required></label><label>行数<input id="canvas-height" type="number" min="8" max="256" value="64" required></label></div></div><div class="dialog-actions"><button id="canvas-cancel" type="button" class="button button-quiet">取消</button><button type="submit" class="button button-primary">确认</button></div></form>
+    </dialog>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <dialog id="join-dialog" class="dialog join-dialog" aria-labelledby="join-title">
+      <div class="dialog-beads" aria-hidden="true"><i></i><i></i><i></i></div><h2 id="join-title">来拼一会儿豆吧</h2><p>创建自己的小屋，或用邀请码和朋友一起拼。</p>
+      <div class="room-tabs" role="tablist" aria-label="选择加入方式"><button id="room-join-tab" type="button" role="tab" aria-selected="true" aria-controls="join-form">加入房间</button><button id="room-create-tab" type="button" role="tab" aria-selected="false" aria-controls="room-create-form">创建房间</button></div>
+      <form id="join-form"><label for="room-input">房间邀请码</label><input id="room-input" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="输入朋友的邀请码" maxlength="96" required><p id="join-error" class="form-error" role="alert"></p><button id="room-join-submit" class="button button-primary" type="submit">加入，一起拼豆</button></form>
+      <form id="room-create-form" hidden><label for="room-create-name">房间名称</label><input id="room-create-name" maxlength="40" placeholder="给小屋起个名字" required><label for="room-create-code">自定义邀请码</label><div class="input-action"><input id="room-create-code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="96" placeholder="例如 FRIEND2026" required><button id="room-generate-code" class="button button-quiet" type="button">随机生成</button></div><p class="field-note">8–32 位字母、数字、- 或 _，不区分大小写。</p><p id="room-create-error" class="form-error" role="alert"></p><button id="room-create-submit" class="button button-primary" type="submit">创建我的房间</button></form>
+      <p class="dialog-footnote">房间会保存在这台托管电脑上。网站地址改变后，邀请码依然有效。</p><button id="room-dialog-close" class="button button-quiet dialog-return" hidden>返回当前画板</button>
+    </dialog>
+    <dialog id="invite-dialog" class="dialog" aria-labelledby="invite-title">
+      <h2 id="invite-title">邀请朋友一起拼</h2><p>先打开网站，再输入邀请码。</p>
+      <label for="invite-url">网站地址</label><div class="input-action"><input id="invite-url" readonly><button id="copy-site" class="button button-quiet">复制地址</button></div>
+      <div id="invite-code-display"><label for="invite-code-value">房间邀请码</label><div class="input-action"><input id="invite-code-value" readonly><button id="copy-code" class="button button-quiet">复制邀请码</button></div></div>
+      <form id="invite-code-form"><label id="invite-code-label" for="invite-code-input">设置邀请码</label><div class="input-action"><input id="invite-code-input" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="96" placeholder="8–32 位邀请码" required><button id="invite-code-submit" class="button button-quiet" type="submit">保存邀请码</button></div></form>
+      <p id="invite-error" class="form-error" role="alert"></p><p id="invite-note" class="invite-note"></p><textarea id="invite-copy-text" class="copy-fallback" aria-label="完整邀请说明" tabindex="-1" readonly></textarea>
+      <div class="dialog-actions"><button id="invite-close" class="button button-quiet">返回画板</button><button id="copy-link" class="button button-primary">复制邀请说明</button></div>
+    </dialog>
+    <dialog id="download-dialog" class="dialog" aria-labelledby="download-title"><h2 id="download-title">4K 作品已准备好</h2><p>4096 × 4096 PNG，已经开始下载。手机用户可在浏览器下载列表或“文件”中找到图片。</p><a id="download-again" class="button button-primary" download>再次下载图片</a><button id="download-close" class="button button-quiet">返回画板</button></dialog>
   </div>
 </body>
 </html>

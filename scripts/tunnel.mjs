@@ -37,8 +37,6 @@ try {
   const health = await fetch(`http://127.0.0.1:${port}/api/health`, {signal:fetchSignal(3000)});
   checkCancelled();
   if (!health.ok || (await health.json()).service !== 'bead-room') throw new Error('请先运行“启动拼豆.cmd”，再启动穿透。');
-  const room = JSON.parse(await readFile(new URL('room.json', data), 'utf8'));
-  checkCancelled();
   await mkdir(new URL('tools/', root), {recursive:true});
   try { await access(exe); }
   catch {
@@ -63,8 +61,8 @@ try {
     const url = buffer.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
     if (url) {
       announced = true;
-      const invite = `${url[0]}/#${room.key}`;
-      console.log(`\n手机和朋友使用这个完整链接：\n${invite}\n\n关闭穿透后链接失效，下次启动会生成新地址。\n`);
+      const invite = `${url[0]}/`;
+      console.log(`\n手机和朋友使用这个网站入口：\n${invite}\n\n打开网站后创建房间，或输入房间邀请码加入。\n关闭穿透后网址失效，下次启动会生成新地址，房间邀请码保持不变。\n`);
       publishing = writeFile(new URL('public-url.txt',data),invite).catch(error => console.error('邀请链接保存失败：', error.message));
       const browser = spawn('powershell.exe',['-NoProfile','-WindowStyle','Hidden','-Command',`Start-Process '${invite}'`],{windowsHide:true,stdio:'ignore',detached:true});
       browser.on('error', () => console.error('无法自动打开浏览器，请复制上方的完整邀请链接。'));

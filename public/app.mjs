@@ -1,6 +1,8 @@
 import { TapGesture, lineCells, stepCell } from './interaction.mjs';
 import { beginSync, acceptSnapshot, canExport } from './sync-state.mjs';
 import { COLOR_GROUPS, paletteEntries } from './palette.mjs';
+import { createRoomUI } from './rooms.mjs';
+import { initWorkspace } from './workspace.mjs';
 
 const $ = id => document.getElementById(id);
 const canvas = $('board'), container = $('canvas-container'), ctx = canvas.getContext('2d');
@@ -11,7 +13,6 @@ const cols = () => state.board?.width ?? state.board?.size ?? 64;
 const rows = () => state.board?.height ?? state.board?.size ?? 64;
 const gesture = new TapGesture(), pointers = new Map();
 let key = '', reconnectTimer, retry = 0, toastTimer, frame, downloadUrl;
-const localAddress = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
 
 function toast(message) {
   $('toast').textContent = message; $('toast').hidden = false;
@@ -31,9 +32,10 @@ function clearPending() {
 function controls() {
   $('export-button').disabled = !canExport(state) || paintQueue.size > 0;
   $('invite-button').disabled = !state.ready;
+  $('room-button').disabled = !canSwitchRoom();
   for (const id of ['canvas-new','canvas-expand','canvas-clear','canvas-select']) $(id).disabled = !state.ready || state.pending.size > 0 || paintQueue.size > 0;
   const status = $('save-status');
-  status.textContent = !state.ready ? '连接后继续拼豆' : state.pending.size || paintQueue.size ? '正在保存…' : '修改已保存到电脑';
+  status.textContent = !state.ready ? '尚未连接' : state.pending.size || paintQueue.size ? '正在保存…' : '已保存';
   status.classList.toggle('saved', state.ready && !state.pending.size && !paintQueue.size);
 }
 function refreshBoardInfo() {
@@ -76,6 +78,7 @@ function connect() {
       if (changed) { stopStroke(); clearPending(); state.hover=null; state.keyboardCell=null; }
       finishRequest(message.requestId);
       acceptSnapshot(state, message); retry = 0;
+      roomUI.update(message.room);
       state.canvasId=message.canvasId; state.epoch=message.epoch;
       $('canvas-select').replaceChildren(...message.canvases.map(c => { const o=document.createElement('option'); o.value=c.id; o.textContent=`${c.name} (${c.width}×${c.height})`; return o; }));
       $('canvas-select').value=state.canvasId;
@@ -106,8 +109,8 @@ function connect() {
     }
     if (message.type === 'error') {
       if (message.code === 'unauthorized') {
-        denied = true; state.ready = false; clearPending(); $('join-error').textContent = message.message;
-        if (!$('join-dialog').open) $('join-dialog').showModal();
+        denied = true; key = ''; state.ready = false; stopStroke(); clearPending();
+        roomUI.unauthorized('房间凭据已失效，请输入邀请码重新加入');
       } else { toast(message.message || '连接需要恢复，请稍候'); requestSync(); }
       controls();
     }
@@ -115,7 +118,7 @@ function connect() {
   ws.addEventListener('close', () => {
     if (state.socket !== ws) return;
     state.ready = false; stopStroke(); clearPending(); $('empty-hint').hidden = true;
-    connection(denied ? '需要邀请链接' : '正在重连'); scheduleDraw();
+    connection(denied ? '请选择房间' : '正在重连'); scheduleDraw();
     if (!denied) reconnectTimer = setTimeout(connect, Math.min(1000 * 2 ** retry++, 10000));
   });
   ws.addEventListener('error', () => {});
@@ -290,7 +293,7 @@ setInterval(()=>{
   }
 },50);
 function advanceStroke() {
-  if(!mouseHeld || !directionKey || strokeIndex===null || state.tool!=='place') return;
+  if(!mouseHeld || !directionKey || strokeIndex===null || state.tool!=='place' || document.querySelector('dialog[open]')) return;
   if(state.pending.size>=8 || paintQueue.size>2) return;
   const next=stepCell(strokeIndex,directionKey,cols(),rows());
   if(next===null) return;
@@ -331,6 +334,7 @@ canvas.addEventListener('pointerup', event => {
   if(event.pointerType==='mouse') {mouseHeld=false;directionKey=null;clearInterval(repeatTimer);repeatTimer=null;paintQueue.clear();controls();}
   else touchLast=null;
   if(index!==null && !strokeUsed) operate(index);
+  controls();
 });
 canvas.addEventListener('pointercancel',()=>stopStroke());
 canvas.addEventListener('lostpointercapture',event=>{if(pointers.has(event.pointerId)) stopStroke();});
@@ -351,6 +355,7 @@ canvas.addEventListener('pointerleave', () => { state.hover=null; coordinates(nu
 canvas.addEventListener('wheel', event => { event.preventDefault(); const p=point(event); zoomAt(p.x,p.y,Math.exp(-event.deltaY*.0015)); }, {passive:false});
 canvas.addEventListener('contextmenu', event => event.preventDefault());
 canvas.addEventListener('keydown', event => {
+  if (document.querySelector('dialog[open]')) return;
   const direction={ArrowLeft:'a',ArrowRight:'d',ArrowUp:'w',ArrowDown:'s'}[event.key];
   const offset=direction;
   if (offset !== undefined) {
@@ -384,6 +389,7 @@ function sendCanvas(action,values={},context=state) {
   state.socket.send(JSON.stringify({type:'canvas',requestId,action,canvasId:context.canvasId,epoch:context.epoch,expectedRevision:context.revision ?? state.board.revision,...values}));
 }
 function openCanvasDialog(action) {
+  $('more-dialog').close();
   stopStroke();canvasAction=action;
   canvasContext={canvasId:state.canvasId,epoch:state.epoch,revision:state.board.revision};
   $('canvas-dialog-title').textContent={new:'新建画布',expand:'扩展当前画布',clear:'清空当前画布'}[action];
@@ -405,19 +411,10 @@ $('canvas-form').addEventListener('submit',event=>{
 });
 $('canvas-select').addEventListener('change',event=>{const targetId=event.target.value;event.target.value=state.canvasId;sendCanvas('switch',{targetId});});
 
-$('invite-button').addEventListener('click',()=>{
-  $('invite-url').value=`${location.origin}/#${key}`;
-  $('invite-note').textContent=localAddress ? '这是本机地址，手机无法用它加入。请在电脑上运行“启动穿透.cmd”，打开生成的公网链接后再邀请朋友。' : '持有完整链接的人可以放豆、擦除和导出。你的电脑与穿透服务需要保持运行。';
-  $('invite-dialog').showModal();
-});
-$('copy-link').addEventListener('click',async()=>{
-  try { await navigator.clipboard.writeText($('invite-url').value); toast(localAddress?'已复制本机链接。邀请手机请先启动穿透，使用公网链接。':'邀请链接已复制，可以发给朋友了'); }
-  catch { $('invite-url').focus(); $('invite-url').select(); toast('请复制已选中的完整链接'); }
-});
-$('invite-close').addEventListener('click',()=>$('invite-dialog').close());
 $('download-close').addEventListener('click',()=>$('download-dialog').close());
 $('export-button').addEventListener('click',async()=>{
   if (!state.ready || state.pending.size || paintQueue.size || state.exporting) return;
+  $('more-dialog').close();
   state.exporting=true; controls(); const label=$('export-button').querySelector('span'); label.textContent='生成中…';
   try {
     const response=await fetch('/api/export',{method:'POST',headers:{Authorization:`Bearer ${key}`}});
@@ -432,17 +429,28 @@ $('export-button').addEventListener('click',async()=>{
   finally { state.exporting=false; label.textContent='导出 4K'; controls(); }
 });
 
-function readKey(value) {
-  let candidate=value.trim();
-  if (candidate.includes('#')) candidate=candidate.split('#').at(-1);
-  return /^[a-f0-9]{48}$/.test(candidate) ? candidate : '';
+function canSwitchRoom() {
+  return !state.pending.size && !paintQueue.size && !state.exporting && !pointers.size;
 }
-$('join-form').addEventListener('submit',event=>{
-  event.preventDefault(); const next=readKey($('room-input').value);
-  if (!next) { $('join-error').textContent='请粘贴完整邀请链接，或 48 位房间密钥'; return; }
-  key=next; history.replaceState(null,'',`/#${key}`); $('join-error').textContent=''; $('join-dialog').close(); retry=0; connect();
-});
-$('join-dialog').addEventListener('cancel',event=>event.preventDefault());
+function activateRoom(session) {
+  if (!canSwitchRoom()) {toast('请等待当前修改保存或导出完成，再切换房间');return false;}
+  stopStroke(); clearPending(); clearTimeout(reconnectTimer);
+  key=session.key; retry=0; state.board=null; state.canvasId=null; state.epoch=null;
+  state.hover=null; state.keyboardCell=null; state.online=0; state.ready=false;
+  $('canvas-select').replaceChildren(); $('room-name').textContent=session.room.name;
+  $('empty-hint').hidden=true; $('bead-count').textContent='0'; $('board-version').textContent='';
+  $('coordinate-label').textContent='请选择格子';
+  if(downloadUrl){URL.revokeObjectURL(downloadUrl);downloadUrl=null;}
+  $('download-again').removeAttribute('href'); $('download-dialog').close();
+  connect(); scheduleDraw(); return true;
+}
+const roomUI=createRoomUI({onEnter:activateRoom,canSwitch:canSwitchRoom,notify:toast});
+initWorkspace({beforeLayout:()=>{
+  if(pointers.size){toast('请先结束当前手势，再调整布局');return false;}
+  return true;
+}});
+$('more-button').addEventListener('click',()=>{if(pointers.size)return;$('more-dialog').showModal();});
+$('more-close').addEventListener('click',()=>$('more-dialog').close());
 document.querySelector('.brand').addEventListener('click',event=>{event.preventDefault();fitBoard();});
 document.addEventListener('visibilitychange',()=>{
   if (!document.hidden && key) {
@@ -452,6 +460,6 @@ document.addEventListener('visibilitychange',()=>{
 });
 new ResizeObserver(resize).observe(container);
 window.addEventListener('resize', resize);
-key=readKey(location.hash);
-if (key) connect(); else {connection('需要邀请链接');$('join-dialog').showModal();}
+const initialSession=roomUI.restore();
+if (initialSession) activateRoom(initialSession); else {connection('请选择房间');roomUI.open();}
 resize();

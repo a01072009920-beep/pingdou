@@ -177,7 +177,7 @@ test('concurrent starts share an exclusive lock and cannot replace the first PID
   await until(() => second.settled || second.children.length);
   assert.equal(second.children.length, 0);
   assert.equal(await fs.readFile(join(app.dir, 'data', 'tunnel.pid'), 'utf8'), '9101');
-  assert.equal(await fs.readFile(urlFile, 'utf8'), `https://first-room.trycloudflare.com/#${'a'.repeat(48)}`);
+  assert.equal(await fs.readFile(urlFile, 'utf8'), 'https://first-room.trycloudflare.com/');
   assert.match(second.errors.join('\n'), /已经|已有|运行|锁/);
 });
 
@@ -234,7 +234,7 @@ test('late logs from an exited channel cannot overwrite the next channel invitat
   await until(() => exists(urlFile));
   first.children[0].stderr.emit('data', Buffer.from('https://expired-room.trycloudflare.com'));
   await tick();
-  assert.equal(await fs.readFile(urlFile, 'utf8'), `https://current-room.trycloudflare.com/#${'a'.repeat(48)}`);
+  assert.equal(await fs.readFile(urlFile, 'utf8'), 'https://current-room.trycloudflare.com/');
 });
 
 test('custom PORT, signed Windows binary and a split complete invitation still work', async t => {
@@ -249,6 +249,6 @@ test('custom PORT, signed Windows binary and a split complete invitation still w
   run.children[0].stderr.emit('data', Buffer.from('flare.com\n'));
   const inviteFile = join(app.dir, 'data', 'public-url.txt');
   await until(() => exists(inviteFile));
-  assert.equal(await fs.readFile(inviteFile, 'utf8'), `https://share-test.trycloudflare.com/#${'a'.repeat(48)}`);
+  assert.equal(await fs.readFile(inviteFile, 'utf8'), 'https://share-test.trycloudflare.com/');
   assert.equal(run.browserCommands.length, 1);
 });

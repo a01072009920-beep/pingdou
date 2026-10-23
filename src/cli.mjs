@@ -12,7 +12,7 @@ try {
   const pidFile = new URL('../data/server.pid', import.meta.url);
   await writeFile(pidFile, String(process.pid));
   const url = `http://127.0.0.1:${app.address().port}/#${app.room.key}`;
-  console.log(`\n拼豆小屋已启动\n本机打开：${url}\n邀请手机或朋友：先启动内网穿透，再打开公网地址并粘贴同一个邀请密钥。\n按 Ctrl+C 关闭服务。\n`);
+  console.log(`\n拼豆小屋已启动\n本机打开原有作品：${url}\n创建新房间：在页面点击“房间”，选择“创建房间”。\n邀请手机或朋友：先启动内网穿透，分享网站地址和房间邀请码。\n按 Ctrl+C 关闭服务。\n`);
   if (process.argv.includes('--open')) {
     if (process.platform === 'win32') {
       spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', `Start-Process '${url}'`], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
