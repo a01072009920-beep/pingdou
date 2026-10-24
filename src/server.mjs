@@ -8,6 +8,7 @@ import { openRooms, roomInfo } from './rooms.mjs';
 import { createRoomAPI, sameOrigin } from './room-api.mjs';
 import { ExportManager } from './export.mjs';
 import { catalog, changeCanvas, withBoard } from './canvases.mjs';
+import { createImportAPI } from './import-pattern.mjs';
 
 const publicDir = new URL('../public/', import.meta.url);
 const assets = new Map([
@@ -21,6 +22,9 @@ const assets = new Map([
   ['/palette.mjs', ['palette.mjs', 'text/javascript; charset=utf-8']],
   ['/rooms.mjs', ['rooms.mjs', 'text/javascript; charset=utf-8']],
   ['/workspace.mjs', ['workspace.mjs', 'text/javascript; charset=utf-8']],
+  ...['image-input','converter-ui','color-box','pattern-sheet','pattern-guide','color-science','pattern-data','convert-core','convert-worker']
+    .map(name => [`/${name}.mjs`, [`${name}.mjs`, 'text/javascript; charset=utf-8']]),
+  ['/converter.css', ['converter.css', 'text/css; charset=utf-8']],
 ]);
 const securityHeaders = {
   'X-Content-Type-Options': 'nosniff',
@@ -46,14 +50,18 @@ export async function createApp({ dataDir = fileURLToPath(new URL('../data/', im
   const broadcast = (entry, message) => { for (const ws of wss.clients) if (ws.authorized && ws.entry === entry) send(ws, message); };
   const presence = entry => broadcast(entry, { type: 'presence', online: online(entry) });
   const snapshotData = entry => ({ type: 'snapshot', board: entry.room.board, online: online(entry), room:roomInfo(entry),
-    canvasId: entry.room.activeId, epoch: entry.room.canvasEpoch, canvases: catalog(entry.room) });
+    canvasId: entry.room.activeId, epoch: entry.room.canvasEpoch, canvases: catalog(entry.room),
+    reference: entry.room.canvases.find(canvas => canvas.id === entry.room.activeId)?.reference ?? null });
   const snapshot = ws => send(ws, snapshotData(ws.entry));
+  const importAPI = createImportAPI({rooms,save,isClosing:()=>closing,sameOrigin,onError,
+    broadcast:(entry,requestId)=>broadcast(entry,{...snapshotData(entry),requestId})});
 
   const server = createServer(async (req, res) => {
     for (const [name, value] of Object.entries(securityHeaders)) res.setHeader(name, value);
     try {
       const path = new URL(req.url, 'http://localhost').pathname;
       if (closing) { res.writeHead(503); res.end('服务正在关闭'); return; }
+      if (await importAPI.handle(req, res, path)) return;
       if (await roomAPI(req, res, path)) return;
       if (path === '/api/export' && req.method === 'POST') {
         const key = req.headers.authorization?.replace(/^Bearer /, '');
@@ -196,8 +204,10 @@ export async function createApp({ dataDir = fileURLToPath(new URL('../data/', im
     close: () => {
       if (closedPromise) return closedPromise;
       closing = true; clearInterval(heartbeat);
+      importAPI.close();
       for (const ws of wss.clients) ws.terminate();
       closedPromise = (async () => {
+        await importAPI.idle();
         await rooms.idle();
         await Promise.all([...rooms.entries.values()].map(entry => entry.queue));
         await exporter.close();

@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node src/cli.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check src/server.mjs && node --check src/rooms.mjs && node --check src/room-api.mjs && node --check public/app.mjs && node --check public/rooms.mjs && node --check public/workspace.mjs && node --check public/boot.js && node --check scripts/tunnel.mjs"
+    "check": "node scripts/check.mjs"
   },
   "dependencies": { "ws": "^8.18.3" }
 }

@@ -3,16 +3,22 @@ import { beginSync, acceptSnapshot, canExport } from './sync-state.mjs';
 import { COLOR_GROUPS, paletteEntries } from './palette.mjs';
 import { createRoomUI } from './rooms.mjs';
 import { initWorkspace } from './workspace.mjs';
+import { createConverter } from './converter-ui.mjs';
+import { createColorBox } from './color-box.mjs';
+import { openSheetExport } from './pattern-sheet.mjs';
+import { hasGuide, guideCode, guidePattern } from './pattern-guide.mjs';
+import { contrastText } from './color-science.mjs';
 
 const $ = id => document.getElementById(id);
 const canvas = $('board'), container = $('canvas-container'), ctx = canvas.getContext('2d');
 const state = { board: null, ready: false, tool: 'place', color: null, socket: null, online: 0,
-  pending: new Map(), grid: true, hover: null, keyboardCell: null, exporting: false };
+  pending: new Map(), grid: true, hover: null, keyboardCell: null, exporting: false, roomId:null, reference:null };
 const view = { width: 0, height: 0, zoom: .5, x: 0, y: 0, fit: true };
 const cols = () => state.board?.width ?? state.board?.size ?? 64;
 const rows = () => state.board?.height ?? state.board?.size ?? 64;
 const gesture = new TapGesture(), pointers = new Map();
 let key = '', reconnectTimer, retry = 0, toastTimer, frame, downloadUrl;
+let converterUI=null, colorBoxUI=null;
 
 function toast(message) {
   $('toast').textContent = message; $('toast').hidden = false;
@@ -30,10 +36,13 @@ function clearPending() {
   state.pending.clear();
 }
 function controls() {
-  $('export-button').disabled = !canExport(state) || paintQueue.size > 0;
+  const importing=converterUI?.isBusy() === true;
+  $('export-button').disabled = !canExport(state) || paintQueue.size > 0 || importing;
+  $('sheet-export').disabled = !canExport(state) || paintQueue.size > 0 || importing;
+  $('image-convert').disabled = !state.ready || importing;
   $('invite-button').disabled = !state.ready;
   $('room-button').disabled = !canSwitchRoom();
-  for (const id of ['canvas-new','canvas-expand','canvas-clear','canvas-select']) $(id).disabled = !state.ready || state.pending.size > 0 || paintQueue.size > 0;
+  for (const id of ['canvas-new','canvas-expand','canvas-clear','canvas-select']) $(id).disabled = !state.ready || state.pending.size > 0 || paintQueue.size > 0 || importing;
   const status = $('save-status');
   status.textContent = !state.ready ? '尚未连接' : state.pending.size || paintQueue.size ? '正在保存…' : '已保存';
   status.classList.toggle('saved', state.ready && !state.pending.size && !paintQueue.size);
@@ -45,9 +54,11 @@ function refreshBoardInfo() {
   canvas.setAttribute('aria-rowcount', rows()); canvas.setAttribute('aria-colcount', cols());
   const count = state.board.cells.reduce((n, cell) => n + (cell.color !== null ? 1 : 0), 0);
   $('bead-count').textContent = count.toLocaleString('en-US');
-  $('empty-hint').hidden = count > 0 || !state.ready;
-  $('board-version').textContent = `作品 ${String(state.board.revision).padStart(4, '0')}`;
+  $('empty-hint').hidden = count > 0 || !state.ready || hasGuide(state.reference);
+  $('board-version').textContent = hasGuide(state.reference) ? `待拼图纸 · 已放 ${count.toLocaleString()} 颗` : `作品 ${String(state.board.revision).padStart(4, '0')}`;
+  coordinates(state.keyboardCell ?? state.hover);
   $('presence-text').textContent = state.online > 1 ? `${state.online} 人在一起拼豆` : '一个人，也可以开始';
+  colorBoxUI?.update({roomId:state.roomId,canvasId:state.canvasId,palette:state.board.palette,cells:state.board.cells,reference:state.reference});
   connection(state.online > 1 ? `${state.online} 人在线` : '已连接', state.ready);
   controls(); scheduleDraw();
 }
@@ -79,6 +90,8 @@ function connect() {
       finishRequest(message.requestId);
       acceptSnapshot(state, message); retry = 0;
       roomUI.update(message.room);
+      state.roomId=message.room?.id ?? state.roomId;
+      state.reference=message.reference ?? null;
       state.canvasId=message.canvasId; state.epoch=message.epoch;
       $('canvas-select').replaceChildren(...message.canvases.map(c => { const o=document.createElement('option'); o.value=c.id; o.textContent=`${c.name} (${c.width}×${c.height})`; return o; }));
       $('canvas-select').value=state.canvasId;
@@ -173,6 +186,7 @@ function setTool(tool) {
 }
 
 function operate(index, quiet = false, action = state.tool, color = state.color) {
+  if (converterUI?.isBusy()) return;
   if (action === 'move' || index === null || !state.board?.cells[index]) return;
   if (!state.ready || !state.board) { toast('连接恢复后再继续拼豆'); return; }
   if ([...state.pending.values()].some(p => p.index === index)) return;
@@ -199,13 +213,15 @@ function hit(x, y) {
   return col >= 0 && row >= 0 && col < cols() && row < rows() ? row * cols() + col : null;
 }
 function coordinates(index) {
-  $('coordinate-label').textContent = index === null ? '每一个小格，都有可能' : `第 ${Math.floor(index / cols()) + 1} 行 · 第 ${index % cols() + 1} 列`;
+  const target=guideCode(state.reference,index,cols());
+  $('coordinate-label').textContent = index === null ? (hasGuide(state.reference)?'照图放豆 · 放大看色号':'每一个小格，都有可能')
+    : `第 ${Math.floor(index / cols()) + 1} 行 · 第 ${index % cols() + 1} 列${target?` · 图纸 ${target}`:''}`;
 }
 function fitBoard() {
   // Leave room for the left/top rulers, without wasting the same space on every edge.
   const availableWidth = view.width - 32 - 12, availableHeight = view.height - 24 - 12;
   if (availableWidth <= 0 || availableHeight <= 0) return;
-  view.zoom = Math.min(availableWidth / (cols()*16), availableHeight / (rows()*16), 1.4);
+  view.zoom = Math.min(availableWidth / (cols()*16), availableHeight / (rows()*16), 4);
   view.x = 32 + (availableWidth - cols()*16 * view.zoom) / 2;
   view.y = 24 + (availableHeight - rows()*16 * view.zoom) / 2;
   view.fit = true; scheduleDraw();
@@ -240,6 +256,18 @@ function draw() {
   ctx.strokeStyle = '#cad7e4'; ctx.lineWidth = 1; ctx.strokeRect(view.x-.5, view.y-.5, side+1, tall+1);
   const x0 = Math.max(0, Math.floor(-view.x / step)), x1 = Math.min(cols(), Math.ceil((view.width - view.x) / step));
   const y0 = Math.max(0, Math.floor(-view.y / step)), y1 = Math.min(rows(), Math.ceil((view.height - view.y) / step));
+  if(hasGuide(state.reference)) {
+    const colors=new Map(state.board.palette.map(color=>[color.code,{hex:color.hex,ink:contrastText(color.hex)}]));
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++) {
+      const index=y*cols()+x,code=guideCode(state.reference,index,cols()),color=colors.get(code);
+      if(!color || state.board.cells[index].color!==null)continue;
+      const left=view.x+x*step,top=view.y+y*step;
+      ctx.fillStyle=color.hex;ctx.fillRect(left,top,step,step);
+      const font=Math.min(12,step*.4,(step-3)/Math.max(1,code.length*.62));
+      if(font>=6){ctx.fillStyle=color.ink;ctx.font=`600 ${font}px sans-serif`;ctx.fillText(code,left+step/2,top+step/2,step-3);}
+    }
+  }
   if (state.grid && step >= 6) {
     ctx.lineWidth = .6;
     for (let x=x0; x<=x1; x++) { ctx.strokeStyle = x%8===0 ? '#cbd9e366' : '#dce5ec60'; ctx.beginPath(); ctx.moveTo(view.x+x*step, Math.max(0,view.y)); ctx.lineTo(view.x+x*step, Math.min(view.height,view.y+tall)); ctx.stroke(); }
@@ -251,7 +279,7 @@ function draw() {
       circle(cx, cy, step*.405, state.board.palette[cell.color].hex);
       if (state.board.palette[cell.color].hex.toUpperCase() === '#FFFFFF') { ctx.strokeStyle = '#d6e0e9'; ctx.lineWidth=.7; ctx.stroke(); }
       circle(cx, cy, step*.128, '#fafcff');
-    } else if (step >= 5) circle(cx,cy, Math.max(.65, step*.075), '#d7e1e9');
+    } else if (step >= 5 && !guideCode(state.reference,index,cols())) circle(cx,cy, Math.max(.65, step*.075), '#d7e1e9');
   }
   ctx.font='10px sans-serif'; ctx.fillStyle='#516a82'; ctx.textAlign='center'; ctx.textBaseline='middle';
   const every=Math.max(1,Math.ceil(28/step));
@@ -277,7 +305,7 @@ function stopStroke(clearQueued = true) {
   controls();
 }
 function enqueue(index) {
-  if(index!==null && state.ready && state.tool!=='move') {
+  if(index!==null && state.ready && state.tool!=='move' && !converterUI?.isBusy()) {
     paintQueue.set(`${state.tool}:${state.color}:${index}`, {index, action:state.tool, color:state.color});
     controls();
   }
@@ -293,13 +321,14 @@ setInterval(()=>{
   }
 },50);
 function advanceStroke() {
-  if(!mouseHeld || !directionKey || strokeIndex===null || state.tool!=='place' || document.querySelector('dialog[open]')) return;
+  if(!mouseHeld || !directionKey || strokeIndex===null || state.tool!=='place' || converterUI?.isBusy() || document.querySelector('dialog[open]')) return;
   if(state.pending.size>=8 || paintQueue.size>2) return;
   const next=stepCell(strokeIndex,directionKey,cols(),rows());
   if(next===null) return;
   strokeIndex=next; state.keyboardCell=next; enqueue(next); coordinates(next); scheduleDraw();
 }
 canvas.addEventListener('pointerdown', event => {
+  if (converterUI?.isBusy() || document.querySelector('dialog[open]')) return;
   if (event.pointerType === 'mouse' && event.button !== 0) return;
   const p=point(event), index=hit(p.x,p.y);
   pointers.set(event.pointerId,p); gesture.down(event.pointerId,p.x,p.y,index);
@@ -355,7 +384,7 @@ canvas.addEventListener('pointerleave', () => { state.hover=null; coordinates(nu
 canvas.addEventListener('wheel', event => { event.preventDefault(); const p=point(event); zoomAt(p.x,p.y,Math.exp(-event.deltaY*.0015)); }, {passive:false});
 canvas.addEventListener('contextmenu', event => event.preventDefault());
 canvas.addEventListener('keydown', event => {
-  if (document.querySelector('dialog[open]')) return;
+  if (converterUI?.isBusy() || document.querySelector('dialog[open]')) return;
   const direction={ArrowLeft:'a',ArrowRight:'d',ArrowUp:'w',ArrowDown:'s'}[event.key];
   const offset=direction;
   if (offset !== undefined) {
@@ -381,7 +410,7 @@ $('grid-toggle').addEventListener('click',()=>{state.grid=!state.grid;$('grid-to
 
 let canvasAction='new', canvasContext=null;
 function sendCanvas(action,values={},context=state) {
-  if(!state.ready || state.pending.size || paintQueue.size) {toast('请等待当前修改保存后再操作');return;}
+  if(!state.ready || state.pending.size || paintQueue.size || converterUI?.isBusy()) {toast('请等待当前修改保存后再操作');return;}
   stopStroke();
   const requestId=crypto.randomUUID();
   const timer=setTimeout(()=>state.socket?.close(),10000);
@@ -389,6 +418,7 @@ function sendCanvas(action,values={},context=state) {
   state.socket.send(JSON.stringify({type:'canvas',requestId,action,canvasId:context.canvasId,epoch:context.epoch,expectedRevision:context.revision ?? state.board.revision,...values}));
 }
 function openCanvasDialog(action) {
+  if(!state.ready || converterUI?.isBusy())return;
   $('more-dialog').close();
   stopStroke();canvasAction=action;
   canvasContext={canvasId:state.canvasId,epoch:state.epoch,revision:state.board.revision};
@@ -413,7 +443,7 @@ $('canvas-select').addEventListener('change',event=>{const targetId=event.target
 
 $('download-close').addEventListener('click',()=>$('download-dialog').close());
 $('export-button').addEventListener('click',async()=>{
-  if (!state.ready || state.pending.size || paintQueue.size || state.exporting) return;
+  if (!state.ready || state.pending.size || paintQueue.size || state.exporting || converterUI?.isBusy()) return;
   $('more-dialog').close();
   state.exporting=true; controls(); const label=$('export-button').querySelector('span'); label.textContent='生成中…';
   try {
@@ -430,12 +460,15 @@ $('export-button').addEventListener('click',async()=>{
 });
 
 function canSwitchRoom() {
-  return !state.pending.size && !paintQueue.size && !state.exporting && !pointers.size;
+  return !state.pending.size && !paintQueue.size && !state.exporting && !pointers.size && !converterUI?.isBusy();
 }
 function activateRoom(session) {
   if (!canSwitchRoom()) {toast('请等待当前修改保存或导出完成，再切换房间');return false;}
   stopStroke(); clearPending(); clearTimeout(reconnectTimer);
+  converterUI?.roomChanged();
   key=session.key; retry=0; state.board=null; state.canvasId=null; state.epoch=null;
+  state.roomId=session.room.id;state.reference=null;
+  colorBoxUI?.update({roomId:state.roomId,canvasId:null,palette:[],cells:[],reference:null});
   state.hover=null; state.keyboardCell=null; state.online=0; state.ready=false;
   $('canvas-select').replaceChildren(); $('room-name').textContent=session.room.name;
   $('empty-hint').hidden=true; $('bead-count').textContent='0'; $('board-version').textContent='';
@@ -445,6 +478,32 @@ function activateRoom(session) {
   connect(); scheduleDraw(); return true;
 }
 const roomUI=createRoomUI({onEnter:activateRoom,canSwitch:canSwitchRoom,notify:toast});
+colorBoxUI=createColorBox({root:$('color-box-panel'),notify:toast,onSelect:index=>{
+  if (!state.ready || converterUI?.isBusy()) return;
+  state.color=index;setTool('place');
+}});
+converterUI=createConverter({
+  getContext:()=>({roomId:state.roomId,key,canvasId:state.canvasId,epoch:state.epoch,board:state.board,ready:state.ready,
+    canImport:state.ready && !state.pending.size && !paintQueue.size && !state.exporting && !pointers.size}),
+  getManualCodes:()=>colorBoxUI.getManualCodes(),notify:toast,onBusyChange:controls,
+  onImported:({canvasId,manualCodes,roomId})=>{
+    if (state.roomId !== roomId) return;
+    colorBoxUI.setManualCodes(roomId,canvasId,manualCodes);
+    requestSync();
+  },
+});
+$('image-convert').addEventListener('click',()=>{
+  if(!state.ready || pointers.size || converterUI.isBusy())return;
+  stopStroke(false);$('more-dialog').close();converterUI.open();
+});
+$('sheet-export').addEventListener('click',()=>{
+  if(!canExport(state) || paintQueue.size || converterUI.isBusy())return;
+  $('more-dialog').close();
+  const palette=state.board.palette.map((color,index)=>({...color,code:color.code || `旧${index+1}`}));
+  const pattern=guidePattern(state.board,state.reference);
+  const name=$('canvas-select').selectedOptions?.[0]?.textContent || '我的拼豆图纸';
+  openSheetExport({pattern,palette,name,notify:toast});
+});
 initWorkspace({beforeLayout:()=>{
   if(pointers.size){toast('请先结束当前手势，再调整布局');return false;}
   return true;

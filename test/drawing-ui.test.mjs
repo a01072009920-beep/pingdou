@@ -6,17 +6,20 @@ import { createBoard } from '../src/board.mjs';
 import { TapGesture, lineCells, stepCell } from '../public/interaction.mjs';
 import { beginSync, acceptSnapshot, canExport } from '../public/sync-state.mjs';
 import { COLOR_GROUPS, paletteEntries } from '../public/palette.mjs';
+import { hasGuide, guideCode, guidePattern } from '../public/pattern-guide.mjs';
+import { contrastText } from '../public/color-science.mjs';
 
 // Exercise the actual event handlers with a small DOM boundary, no browser or user data.
 const source=(await Promise.all(['rooms.mjs','workspace.mjs','app.mjs'].map(file=>readFile(new URL('../public/'+file,import.meta.url),'utf8')))).join('\n').replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'');
 function harness() {
-  const nodes=new Map(), intervals=new Map(); let timer=0;
-  function element() { return {value:'',hidden:false,open:false,children:[],handlers:{},textContent:'',tagName:'CANVAS',style:{setProperty(){}},
+  const nodes=new Map(), intervals=new Map(), drawing=[]; let timer=0;
+  const integration={updates:[],personal:[],sheets:[],busy:false,opens:0,changes:0};
+  function element() { return {value:'',hidden:false,open:false,children:[],handlers:{},textContent:'',dataset:{},tagName:'CANVAS',style:{setProperty(){}},
     classList:{toggle(){},add(){},remove(){}},setAttribute(){},removeAttribute(){},focus(){},setPointerCapture(){},
     addEventListener(name,fn){(this.handlers[name]??=[]).push(fn);},
     replaceChildren(...children){this.children=children;},append(child){this.children.push(child);},
     querySelector(){return element();},getBoundingClientRect(){return {left:0,top:0,width:600,height:600};},
-    getContext(){return new Proxy({}, {get:()=>()=>{}});},showModal(){this.open=true;},close(){this.open=false;} }; }
+    getContext(){return new Proxy({}, {get:(target,name)=>name in target?target[name]:(...args)=>drawing.push({name,args,fillStyle:target.fillStyle,font:target.font}),set:(target,name,value)=>{target[name]=value;return true;}});},showModal(){this.open=true;},close(){this.open=false;} }; }
   const get=id=>{if(!nodes.has(id))nodes.set(id,element());return nodes.get(id);};
   const document=Object.assign(element(),{hidden:false,getElementById:get,createElement:element,
     querySelector:selector=>selector==='dialog[open]'?null:get(selector)});
@@ -27,12 +30,16 @@ function harness() {
     matchMedia:()=>({matches:false,addEventListener(){}}),
     crypto:{randomUUID:()=>String(++timer)},requestAnimationFrame:()=>1,clearTimeout(){},setTimeout:()=>++timer,
     setInterval:(fn,ms)=>{const id=++timer;intervals.set(id,{fn,ms});return id;},clearInterval:id=>intervals.delete(id),
-    TapGesture,lineCells,stepCell,beginSync,acceptSnapshot,canExport,COLOR_GROUPS,paletteEntries});
+    TapGesture,lineCells,stepCell,beginSync,acceptSnapshot,canExport,COLOR_GROUPS,paletteEntries,hasGuide,guideCode,guidePattern,contrastText,
+    createColorBox:()=>({update:value=>integration.updates.push(value),getManualCodes:()=>['F4'],
+      setManualCodes:(...args)=>integration.personal.push(args),isModalOpen:()=>false}),
+    createConverter:args=>{integration.converter=args;return {open(){integration.opens++;},close(){},roomChanged(){integration.changes++;},isBusy:()=>integration.busy};},
+    openSheetExport:value=>integration.sheets.push(value)});
   vm.runInContext(source,context);
   context.board=createBoard(16,16);
   vm.runInContext('state.board=board;state.ready=true;state.color=0;state.canvasId="test";state.epoch=0;view.zoom=1;view.x=0;view.y=0;',context);
   const emit=(node,name,values={})=>{for(const fn of node.handlers[name]??[])fn({pointerId:1,pointerType:'mouse',button:0,clientX:24,clientY:24,preventDefault(){},target:get('board'),...values});};
-  return {get,document,window,emit,sent,sockets,context,tick:ms=>{for(const t of [...intervals.values()])if(t.ms===ms)t.fn();}};
+  return {get,document,window,emit,sent,sockets,context,integration,drawing,tick:ms=>{for(const t of [...intervals.values()])if(t.ms===ms)t.fn();}};
 }
 test('mouse plus direction places from origin, stops on release and cannot wrap right edge',()=>{
   const h=harness(),c=h.get('board');
@@ -87,6 +94,14 @@ test('fit reserves ruler space and contains square and rectangular boards',()=>{
   }
 });
 
+test('small initial boards use the available space up to the same maximum as manual zoom',()=>{
+  const h=harness();
+  const zoom=vm.runInContext('state.board.width=16;state.board.height=16;view.width=600;view.height=600;fitBoard();view.zoom;',h.context);
+  assert.equal(zoom,(600-32-12)/(16*16));
+  const maximum=vm.runInContext('state.board.width=8;state.board.height=8;fitBoard();view.zoom;',h.context);
+  assert.equal(maximum,4);
+});
+
 test('resize does not reset an unchanged canvas and preserves the panned center',()=>{
   const h=harness();
   vm.runInContext(`let resets=0;let storedWidth=canvas.width,storedHeight=canvas.height;
@@ -131,4 +146,72 @@ test('touch release re-enables room switching when all saves finished before the
   assert.equal(h.get('room-button').disabled,true);
   h.emit(c,'pointerup',{pointerType:'touch',clientX:40});
   assert.equal(h.get('room-button').disabled,false);
+});
+
+test('image import pauses drawing and room switching until its transaction settles',()=>{
+  const h=harness();h.integration.busy=true;
+  h.emit(h.get('board'),'pointerdown');h.emit(h.get('board'),'pointerup');
+  assert.equal(h.sent.length,0);
+  assert.equal(vm.runInContext('canSwitchRoom()',h.context),false);
+  h.integration.busy=false;
+  h.emit(h.get('board'),'pointerdown');h.emit(h.get('board'),'pointerup');
+  assert.equal(h.sent.length,1);
+});
+
+test('authoritative snapshots supply shared colors and late imports cannot change another room',()=>{
+  const h=harness();
+  assert.ok(h.integration.converter,'converter is initialized');
+  vm.runInContext('state.roomId="one";',h.context);
+  const reference={items:[{code:'F4',count:1}],total:1,colors:1};
+  h.sockets[0].handlers.message({data:JSON.stringify({type:'snapshot',room:{id:'one',name:'房间一'},
+    board:createBoard(8,8),canvases:[{id:'new',name:'新图纸',width:8,height:8}],canvasId:'new',epoch:1,online:1,reference})});
+  assert.deepEqual(JSON.parse(JSON.stringify(h.integration.updates.at(-1).reference)),reference);
+  h.integration.converter.onImported({canvasId:'imported',manualCodes:['A5'],roomId:'one'});
+  assert.equal(vm.runInContext('state.canvasId',h.context),'new');
+  assert.deepEqual(h.integration.personal.at(-1),['one','imported',['A5']]);
+  vm.runInContext('state.roomId="two";',h.context);
+  const before=h.integration.personal.length;
+  h.integration.converter.onImported({canvasId:'late',manualCodes:['C7'],roomId:'one'});
+  assert.equal(h.integration.personal.length,before);
+});
+
+test('sheet export captures stable cell codes and refuses unsaved drawing',()=>{
+  const h=harness();
+  vm.runInContext('state.board.cells[0].color=0;',h.context);
+  h.emit(h.get('sheet-export'),'click');
+  assert.equal(h.integration.sheets.length,1);
+  assert.equal(h.integration.sheets[0].pattern.cells[0],'A1');
+  vm.runInContext('state.board.cells[0].color=1;state.pending.set("saving",{timer:1});',h.context);
+  assert.equal(h.integration.sheets[0].pattern.cells[0],'A1');
+  h.emit(h.get('sheet-export'),'click');
+  assert.equal(h.integration.sheets.length,1);
+});
+
+test('empty guide draws target color and full code without occupying a playable cell',()=>{
+  const h=harness();
+  vm.runInContext(`state.reference={schema:2,width:16,height:16,total:1,cells:Array(256).fill(null)};
+    state.reference.cells[17]='F4';view.zoom=2;refreshBoardInfo();draw();coordinates(17);`,h.context);
+  assert.ok(h.drawing.some(call=>call.name==='fillText'&&call.args[0]==='F4'));
+  assert.ok(h.drawing.some(call=>call.name==='fillRect'&&call.fillStyle==='#FC283C'));
+  assert.equal(h.get('bead-count').textContent,'0');
+  assert.equal(h.get('empty-hint').hidden,true);
+  assert.match(h.get('coordinate-label').textContent,/图纸 F4/);
+  assert.match(h.get('board-version').textContent,/已放 0/);
+  h.emit(h.get('board'),'pointerdown',{clientX:48,clientY:48});h.emit(h.get('board'),'pointerup',{clientX:48,clientY:48});
+  assert.equal(h.sent.at(-1)?.action,'place');assert.equal(h.sent.at(-1)?.index,17);
+  assert.equal(vm.runInContext('state.board.cells[17].color',h.context),null);
+});
+
+test('erasing a bead reveals the same target guide and exports the target, not progress',()=>{
+  const h=harness();
+  vm.runInContext(`state.reference={schema:2,width:16,height:16,total:1,cells:Array(256).fill(null)};
+    state.reference.cells[17]='F4';view.zoom=2;state.board.cells[17].color=0;draw();`,h.context);
+  assert.equal(h.drawing.some(call=>call.name==='fillText'&&call.args[0]==='F4'),false);
+  vm.runInContext('state.board.cells[17].color=null;',h.context);h.drawing.length=0;
+  vm.runInContext('draw();',h.context);
+  assert.equal(h.drawing.some(call=>call.name==='fillText'&&call.args[0]==='F4'),true);
+  h.emit(h.get('sheet-export'),'click');
+  assert.equal(h.integration.sheets.at(-1).pattern.cells[17],'F4');
+  vm.runInContext("state.reference.cells[17]='B7';",h.context);
+  assert.equal(h.integration.sheets.at(-1).pattern.cells[17],'F4');
 });

@@ -5,7 +5,7 @@ export function initWorkspace({beforeLayout}) {
   try { preferences = JSON.parse(localStorage.getItem('bead-workspace-v1')) || {}; } catch {}
   if (!preferences || typeof preferences !== 'object') preferences = {};
   let explicit = typeof preferences.paletteOpen === 'boolean';
-  let paletteOpen = explicit ? preferences.paletteOpen : !narrow.matches;
+  let paletteOpen = explicit ? preferences.paletteOpen : false;
   let focus = preferences.focus === true;
   function render() {
     $('palette-panel').hidden = !paletteOpen;
@@ -30,6 +30,6 @@ export function initWorkspace({beforeLayout}) {
     if (!beforeLayout()) return;
     focus = !focus; render(); remember();
   });
-  narrow.addEventListener('change', () => {if (!explicit && beforeLayout()) {paletteOpen = !narrow.matches; render();}});
+  narrow.addEventListener('change', () => {if (!explicit && beforeLayout()) {paletteOpen = false; render();}});
   render();
 }

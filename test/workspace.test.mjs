@@ -29,11 +29,20 @@ test('phone starts collapsed; toggling keeps explicit preference after rotation 
   restored.click('palette-close');assert.equal(restored.get('palette-panel').hidden,true);
   assert.equal(restored.get('palette-toggle').focused,true);
 });
-test('desktop shows palette; focus leaves a reachable exit, with storage failure allowed',()=>{
-  const h=harness({narrow:false,broken:true});assert.equal(h.get('palette-panel').hidden,false);
+test('desktop starts collapsed; focus leaves a reachable exit, with storage failure allowed',()=>{
+  const h=harness({narrow:false,broken:true});assert.equal(h.get('palette-panel').hidden,true);
   h.click('focus-toggle');assert.equal(h.get('app-root').classList.values.has('focus-mode'),true);
   assert.equal(h.get('focus-toggle').textContent,'退出专注');
   h.click('focus-toggle');assert.equal(h.get('app-root').classList.values.has('focus-mode'),false);
+});
+test('a cold desktop stays collapsed after rotation, while a saved open preference is respected',()=>{
+  const cold=harness({narrow:false});assert.equal(cold.get('palette-panel').hidden,true);
+  cold.query.matches=true;cold.query.change();cold.query.matches=false;cold.query.change();
+  assert.equal(cold.get('palette-panel').hidden,true);
+  const restored=harness({narrow:false,saved:{paletteOpen:true,focus:false}});
+  assert.equal(restored.get('palette-panel').hidden,false);
+  restored.query.matches=true;restored.query.change();
+  assert.equal(restored.get('palette-panel').hidden,false);
 });
 test('changing panels during an active gesture is refused instead of moving its target',()=>{
   const h=harness({allow:false});h.click('palette-toggle');h.click('focus-toggle');

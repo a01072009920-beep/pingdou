@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createBoard, boardWidth, boardHeight, validDimension, isValidBoard } from './board.mjs';
+import { validImportReference } from './import-pattern.mjs';
 
 export function initializeCanvases(room) {
   if (room.canvases) return room;
@@ -13,7 +14,8 @@ export function validCanvases(room) {
     && room.canvases.every(c => c && typeof c === 'object')
     && new Set(room.canvases.map(c => c.id)).size === room.canvases.length
     && room.canvases.some(c => c.id === room.activeId)
-    && room.canvases.every(c => typeof c.id === 'string' && typeof c.name === 'string' && isValidBoard(c.board)));
+    && room.canvases.every(c => typeof c.id === 'string' && typeof c.name === 'string' && isValidBoard(c.board)
+      && (c.reference === undefined || validImportReference(c.reference,boardWidth(c.board),boardHeight(c.board)))));
 }
 export function catalog(room) {
   return room.canvases.map(c => ({ id: c.id, name: c.name, createdAt: c.createdAt,

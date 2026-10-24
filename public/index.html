@@ -8,6 +8,7 @@
   <title>豆在一起 · 共享拼豆小屋</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./converter.css">
   <script defer src="./boot.js"></script>
 </head>
 <body>
@@ -57,11 +58,13 @@
           </div>
           <div class="zoom-control" role="group" aria-label="画板缩放"><button id="zoom-out" aria-label="缩小画板">−</button><output id="zoom-value">100%</output><button id="zoom-in" aria-label="放大画板">+</button><span class="zoom-divider"></span><button id="zoom-fit" class="fit-button">适应画板</button></div>
         </footer>
+        <section id="color-box-panel" aria-label="我的颜色盒子"></section>
       </main>
     </div>
     <dialog id="more-dialog" class="dialog" aria-labelledby="more-title">
       <h2 id="more-title">画布与更多</h2><p id="presence-text">一个人，也可以开始</p>
       <div class="canvas-actions"><button id="canvas-new" class="button button-quiet" disabled>新建画布</button><button id="canvas-expand" class="button button-quiet" disabled>扩展画布</button><button id="canvas-clear" class="button button-quiet" disabled>清盘</button></div>
+      <div class="canvas-actions"><button id="image-convert" class="button button-primary" disabled>图片转图纸</button><button id="sheet-export" class="button button-quiet" disabled>导出色号图纸</button></div>
       <div class="canvas-actions"><button id="export-button" class="button button-primary" disabled><span>导出 4K</span></button><button id="grid-toggle" class="button button-quiet" aria-pressed="true">网格 开</button></div>
       <details class="help"><summary>操作帮助</summary><p>每格一颗豆，换色前先擦除。电脑轻点放豆，普通拖动移动板面；按住左键配合 W / A / S / D 连续放豆。</p><p>手机和平板单指沿轨迹放豆，双指移动缩放；选“移动”后可单指平移。放大后更容易精确操作。</p><p>新建会保留旧画布；清盘会保存可重新打开的备份。同一房间的画布变化会同步给所有参与者。</p></details>
       <div class="dialog-actions"><button id="more-close" class="button button-quiet">返回画板</button></div>

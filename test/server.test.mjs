@@ -47,7 +47,7 @@ test('both HTTP entry pages serve their stylesheet, bootstrap and all applicatio
     assert.equal(response.status, 200);
     const html = await response.text();
     const resources = [...html.matchAll(/(?:src|href)="(\.\/[^\"]+)"/g)].map(match => new URL(match[1], base + path));
-    assert.equal(resources.length, 2);
+    assert.equal(resources.length, 3);
     for (const resource of resources) {
       const asset = await fetch(resource);
       assert.equal(asset.status, 200, resource.pathname);
@@ -55,7 +55,7 @@ test('both HTTP entry pages serve their stylesheet, bootstrap and all applicatio
       assert.ok((await asset.text()).length > 0);
     }
   }
-  for (const path of ['/app.mjs','/interaction.mjs','/sync-state.mjs','/palette.mjs']) {
+  for (const path of ['/app.mjs','/interaction.mjs','/sync-state.mjs','/palette.mjs','/converter-ui.mjs','/image-input.mjs','/color-box.mjs','/pattern-sheet.mjs','/convert-core.mjs','/convert-worker.mjs','/color-science.mjs','/pattern-data.mjs']) {
     const response = await fetch(base + path);
     assert.equal(response.status, 200, path);
     assert.match(response.headers.get('content-type'), /text\/javascript/);
